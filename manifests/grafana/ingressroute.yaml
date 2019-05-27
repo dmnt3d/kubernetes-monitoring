@@ -1,0 +1,13 @@
+apiVersion: contour.heptio.com/v1beta1
+kind: IngressRoute
+metadata:
+  name: grafana-countour
+  namespace: monitoring
+spec: 
+  virtualhost:
+    fqdn: grafana.k8s.ldc.int
+  routes: 
+    - match: /
+      services:
+        - name: grafana
+          port: 3000

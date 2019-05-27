@@ -1,0 +1,13 @@
+apiVersion: contour.heptio.com/v1beta1
+kind: IngressRoute
+metadata:
+  name: prometheus-countour
+  namespace: monitoring
+spec: 
+  virtualhost:
+    fqdn: prom.k8s.ldc.int
+  routes: 
+    - match: /
+      services:
+        - name: prometheus
+          port: 9090
