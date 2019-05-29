@@ -1,11 +1,7 @@
 # Derived from ./manifests
 ---
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: monitoring
 ---
-apiVersion: rbac.authorization.k8s.io/v1beta1
+apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
   name: prometheus
@@ -18,7 +14,7 @@ subjects:
   name: prometheus-k8s
   namespace: monitoring
 ---
-apiVersion: rbac.authorization.k8s.io/v1beta1
+apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: prometheus
@@ -43,6 +39,11 @@ kind: ServiceAccount
 metadata:
   name: prometheus-k8s
   namespace: monitoring
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
 ---
 apiVersion: v1
 data:
@@ -351,10 +352,10 @@ spec:
     spec:
       containers:
       - name: alertmanager
-        image: quay.io/prometheus/alertmanager:v0.7.1
+        image: quay.io/prometheus/alertmanager:v0.16.2
         args:
-          - '-config.file=/etc/alertmanager/config.yml'
-          - '-storage.path=/alertmanager'
+          - '--config.file=/etc/alertmanager/config.yml'
+          - '--storage.path=/alertmanager'
         ports:
         - name: alertmanager
           containerPort: 9093
@@ -411,8 +412,11 @@ spec:
         app: grafana
         component: core
     spec:
+      securityContext:
+        runAsUser: 472
+        fsGroup: 472
       containers:
-      - image: grafana/grafana:4.2.0
+      - image: grafana/grafana:6.2.0
         name: grafana-core
         imagePullPolicy: IfNotPresent
         # env:
@@ -536,7 +540,7 @@ data:
             "show": false
           },
           "targets": [{
-            "expr": "(time() - container_start_time_seconds{container_name=\"kube-apiserver\"})",
+            "expr": "(time() - process_start_time_seconds{job=\"prometheus\"})",
             "intervalFactor": 2,
             "refId": "A",
             "step": 4
@@ -998,7 +1002,7 @@ data:
           "stack": false,
           "steppedLine": false,
           "targets": [{
-            "expr": "prometheus_evaluator_duration_seconds{quantile!=\"0.01\", quantile!=\"0.05\"}",
+            "expr": "prometheus_evaluator_duration_milliseconds{quantile!=\"0.01\", quantile!=\"0.05\"}",
             "interval": "",
             "intervalFactor": 2,
             "legendFormat": "{{quantile}}",
@@ -1925,7 +1929,7 @@ data:
           "stack": false,
           "steppedLine": false,
           "targets": [{
-            "expr": "sum(rate(container_cpu_usage_seconds_total{image!=\"\",name=~\"^k8s_.*\",instance=~\"^$instance$\",namespace=~\"^$namespace$\"}[1m])) by (pod_name)",
+            "expr": "sum(rate(container_cpu_usage_seconds_total{image!=\"\",name=~\"^k8s_.*\",kubernetes_io_hostname=~\"^$Node$\"}[1m])) by (pod_name)",
             "interval": "",
             "intervalFactor": 2,
             "legendFormat": "{{ pod_name }}",
@@ -2380,20 +2384,19 @@ spec:
         configMap:
           name: grafana-import-dashboards
 ---
-# apiVersion: extensions/v1beta1
-# kind: Ingress
-# metadata:
-#   name: grafana
-#   namespace: monitoring
-# spec:
-#   rules:
-#   - host: <yourchoice>.<cluster-id>.k8s.gigantic.io
-#     http:
-#       paths:
-#       - path: /
-#         backend:
-#          serviceName: grafana
-#          servicePort: 3000
+apiVersion: contour.heptio.com/v1beta1
+kind: IngressRoute
+metadata:
+  name: grafana-countour
+  namespace: monitoring
+spec: 
+  virtualhost:
+    fqdn: grafana.k8s.ldc.int
+  routes: 
+    - match: /
+      services:
+        - name: grafana
+          port: 3000
 ---
 apiVersion: v1
 kind: Secret
@@ -2429,7 +2432,12 @@ data:
       scrape_timeout: 10s
       evaluation_interval: 10s
     rule_files:
-      - "/etc/prometheus-rules/*.rules"
+      - "/etc/prometheus-rules/*.yaml"
+    alerting:
+      alertmanagers:
+      - static_configs:
+        - targets:
+          - alertmanager:9093
     scrape_configs:
 
       # https://github.com/prometheus/prometheus/blob/master/documentation/examples/prometheus-kubernetes.yml#L37
@@ -2537,7 +2545,6 @@ data:
           - role: node
         relabel_configs:
           - action: labelmap
-          - action: labelmap
             regex: __meta_kubernetes_node_label_(.+)
           - target_label: __address__
             replacement: kubernetes.default.svc:443
@@ -2545,7 +2552,6 @@ data:
             regex: (.+)
             target_label: __metrics_path__
             replacement: /api/v1/nodes/${1}/proxy/metrics/cadvisor
-
 kind: ConfigMap
 metadata:
   creationTimestamp: null
@@ -2572,12 +2578,10 @@ spec:
       serviceAccountName: prometheus-k8s
       containers:
       - name: prometheus
-        image: prom/prometheus:v1.7.0
+        image: prom/prometheus:v2.10.0
         args:
-          - '-storage.local.retention=12h'
-          - '-storage.local.memory-chunks=500000'
-          - '-config.file=/etc/prometheus/prometheus.yaml'
-          - '-alertmanager.url=http://alertmanager:9093/'
+          - '--config.file=/etc/prometheus/prometheus.yaml'
+          #- '-alertmanager.url=http://alertmanager:9093/'
         ports:
         - name: webui
           containerPort: 9090
@@ -2601,6 +2605,20 @@ spec:
         configMap:
           name: prometheus-rules
 ---
+apiVersion: contour.heptio.com/v1beta1
+kind: IngressRoute
+metadata:
+  name: prometheus-countour
+  namespace: monitoring
+spec: 
+  virtualhost:
+    fqdn: prom.k8s.ldc.int
+  routes: 
+    - match: /
+      services:
+        - name: prometheus
+          port: 9090
+---
 apiVersion: extensions/v1beta1
 kind: Deployment
 metadata:
@@ -2621,7 +2639,7 @@ spec:
         - containerPort: 8080
 ---
 # ---
-# apiVersion: rbac.authorization.k8s.io/v1beta1
+# apiVersion: rbac.authorization.k8s.io/v1
 # kind: ClusterRoleBinding
 # metadata:
 #   name: kube-state-metrics
@@ -2634,7 +2652,7 @@ spec:
 #   name: kube-state-metrics
 #   namespace: monitoring
 # ---
-# apiVersion: rbac.authorization.k8s.io/v1beta1
+# apiVersion: rbac.authorization.k8s.io/v1
 # kind: ClusterRole
 # metadata:
 #   name: kube-state-metrics
@@ -2677,7 +2695,7 @@ spec:
     protocol: TCP
   selector:
     app: kube-state-metrics
-
+    
 ---
 apiVersion: extensions/v1beta1
 kind: DaemonSet
@@ -2768,7 +2786,7 @@ spec:
         component: node-exporter
     spec:
       containers:
-      - image: prom/node-exporter:v0.14.0
+      - image: prom/node-exporter:v0.18.0
         name: prometheus-node-exporter
         ports:
         - name: prom-node-exp
@@ -2801,70 +2819,79 @@ spec:
 ---
 apiVersion: v1
 data:
-  cpu-usage.rules: |
-    ALERT NodeCPUUsage
-      IF (100 - (avg by (instance) (irate(node_cpu{name="node-exporter",mode="idle"}[5m])) * 100)) > 75
-      FOR 2m
-      LABELS {
-        severity="page"
-      }
-      ANNOTATIONS {
-        SUMMARY = "{{$labels.instance}}: High CPU usage detected",
-        DESCRIPTION = "{{$labels.instance}}: CPU usage is above 75% (current value is: {{ $value }})"
-      }
-  instance-availability.rules: |
-    ALERT InstanceDown
-      IF up == 0
-      FOR 1m
-      LABELS { severity = "page" }
-      ANNOTATIONS {
-        summary = "Instance {{ $labels.instance }} down",
-        description = "{{ $labels.instance }} of job {{ $labels.job }} has been down for more than 1 minute.",
-      }
-  low-disk-space.rules: |
-    ALERT NodeLowRootDisk
-      IF ((node_filesystem_size{mountpoint="/root-disk"} - node_filesystem_free{mountpoint="/root-disk"} ) / node_filesystem_size{mountpoint="/root-disk"} * 100) > 75
-      FOR 2m
-      LABELS {
-        severity="page"
-      }
-      ANNOTATIONS {
-        SUMMARY = "{{$labels.instance}}: Low root disk space",
-        DESCRIPTION = "{{$labels.instance}}: Root disk usage is above 75% (current value is: {{ $value }})"
-      }
+  default-rules.yaml: |
+    groups:
+      - name: cpu-usage.rules
+        rules:
+        - alert: NodeCPUUsage
+          expr: (100 - (avg by(instance) (irate(node_cpu{mode="idle",name="node-exporter"}[5m]))
+            * 100)) > 75
+          for: 2m
+          labels:
+            severity: page
+          annotations:
+            DESCRIPTION: '{{$labels.instance}}: CPU usage is above 75% (current value is:
+              {{ $value }})'
+            SUMMARY: '{{$labels.instance}}: High CPU usage detected'
 
-    ALERT NodeLowDataDisk
-      IF ((node_filesystem_size{mountpoint="/data-disk"} - node_filesystem_free{mountpoint="/data-disk"} ) / node_filesystem_size{mountpoint="/data-disk"} * 100) > 75
-      FOR 2m
-      LABELS {
-        severity="page"
-      }
-      ANNOTATIONS {
-        SUMMARY = "{{$labels.instance}}: Low data disk space",
-        DESCRIPTION = "{{$labels.instance}}: Data disk usage is above 75% (current value is: {{ $value }})"
-      }
-  mem-usage.rules: |
-    ALERT NodeSwapUsage
-      IF (((node_memory_SwapTotal-node_memory_SwapFree)/node_memory_SwapTotal)*100) > 75
-      FOR 2m
-      LABELS {
-        severity="page"
-      }
-      ANNOTATIONS {
-        SUMMARY = "{{$labels.instance}}: Swap usage detected",
-        DESCRIPTION = "{{$labels.instance}}: Swap usage usage is above 75% (current value is: {{ $value }})"
-      }
+      - name: instance-availability.rules
+        rules:
+        - alert: InstanceDown
+          expr: up == 0
+          for: 1m
+          labels:
+            severity: page
+          annotations:
+            description: '{{ $labels.instance }} of job {{ $labels.job }} has been down
+              for more than 1 minute.'
+            summary: Instance {{ $labels.instance }} down
 
-    ALERT NodeMemoryUsage
-      IF (((node_memory_MemTotal-node_memory_MemFree-node_memory_Cached)/(node_memory_MemTotal)*100)) > 75
-      FOR 2m
-      LABELS {
-        severity="page"
-      }
-      ANNOTATIONS {
-        SUMMARY = "{{$labels.instance}}: High memory usage detected",
-        DESCRIPTION = "{{$labels.instance}}: Memory usage is above 75% (current value is: {{ $value }})"
-      }
+      - name: low-disk-space.rules
+        rules:
+        - alert: NodeLowRootDisk
+          expr: ((node_filesystem_size{mountpoint="/root-disk"} - node_filesystem_free{mountpoint="/root-disk"})
+            / node_filesystem_size{mountpoint="/root-disk"} * 100) > 75
+          for: 2m
+          labels:
+            severity: page
+          annotations:
+            DESCRIPTION: '{{$labels.instance}}: Root disk usage is above 75% (current value
+              is: {{ $value }})'
+            SUMMARY: '{{$labels.instance}}: Low root disk space'
+        - alert: NodeLowDataDisk
+          expr: ((node_filesystem_size{mountpoint="/data-disk"} - node_filesystem_free{mountpoint="/data-disk"})
+            / node_filesystem_size{mountpoint="/data-disk"} * 100) > 75
+          for: 2m
+          labels:
+            severity: page
+          annotations:
+            DESCRIPTION: '{{$labels.instance}}: Data disk usage is above 75% (current value
+              is: {{ $value }})'
+            SUMMARY: '{{$labels.instance}}: Low data disk space'
+
+      - name: mem.usage.rules
+        rules:
+        - alert: NodeSwapUsage
+          expr: (((node_memory_SwapTotal - node_memory_SwapFree) / node_memory_SwapTotal)
+            * 100) > 75
+          for: 2m
+          labels:
+            severity: page
+          annotations:
+            DESCRIPTION: '{{$labels.instance}}: Swap usage usage is above 75% (current value
+              is: {{ $value }})'
+            SUMMARY: '{{$labels.instance}}: Swap usage detected'
+        - alert: NodeMemoryUsage
+          expr: (((node_memory_MemTotal - node_memory_MemFree - node_memory_Cached) / (node_memory_MemTotal)
+            * 100)) > 75
+          for: 2m
+          labels:
+            severity: page
+          annotations:
+            DESCRIPTION: '{{$labels.instance}}: Memory usage is above 75% (current value
+              is: {{ $value }})'
+            SUMMARY: '{{$labels.instance}}: High memory usage detected'
+
 kind: ConfigMap
 metadata:
   creationTimestamp: null
