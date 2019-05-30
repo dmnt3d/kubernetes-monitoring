@@ -1,5 +1,10 @@
 # Derived from ./manifests
 ---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+---
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -14,7 +19,7 @@ subjects:
   name: prometheus-k8s
   namespace: monitoring
 ---
-apiVersion: rbac.authorization.k8s.io/v1
+apiVersion: rbac.authorization.k8s.io/v1beta1
 kind: ClusterRole
 metadata:
   name: prometheus
@@ -26,6 +31,7 @@ rules:
   - services
   - endpoints
   - pods
+  - namespaces
   verbs: ["get", "list", "watch"]
 - apiGroups: [""]
   resources:
@@ -33,17 +39,14 @@ rules:
   verbs: ["get"]
 - nonResourceURLs: ["/metrics"]
   verbs: ["get"]
+- nonResourceURLs: ["/probe"]
+  verbs: ["get"]
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: prometheus-k8s
   namespace: monitoring
----
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: monitoring
 ---
 apiVersion: v1
 data:
@@ -374,7 +377,8 @@ spec:
         configMap:
           name: alertmanager-templates
       - name: alertmanager
-        emptyDir: {}
+        persistentVolumeClaim:
+          claimName: alertmanager-pvc
 ---
 apiVersion: v1
 kind: Service
@@ -460,7 +464,8 @@ spec:
           mountPath: /var/lib/grafana
       volumes:
       - name: grafana-persistent-storage
-        emptyDir: {}
+        persistentVolumeClaim:
+          claimName: grafana-pvc
 ---
 apiVersion: v1
 data:
@@ -2552,6 +2557,39 @@ data:
             regex: (.+)
             target_label: __metrics_path__
             replacement: /api/v1/nodes/${1}/proxy/metrics/cadvisor
+
+      - job_name: 'snmp'
+        static_configs:
+          - targets:
+            - 172.16.0.1
+            - 172.16.16.1  # SNMP device.
+        metrics_path: /snmp
+        params:
+          module: [if_mib]
+        relabel_configs:
+          - source_labels: [__address__]
+            target_label: __param_target
+          - source_labels: [__param_target]
+            target_label: instance
+          - target_label: __address__
+            replacement: 172.16.0.169:9116
+
+      - job_name: 'synology'
+        static_configs:
+          - targets:
+            - 172.16.0.10
+            - 192.168.0.10  # SNMP device.
+        metrics_path: /snmp
+        params:
+          module: [synology]
+        relabel_configs:
+          - source_labels: [__address__]
+            target_label: __param_target
+          - source_labels: [__param_target]
+            target_label: instance
+          - target_label: __address__
+            replacement: 172.16.0.169:9116
+ 
 kind: ConfigMap
 metadata:
   creationTimestamp: null
@@ -2587,16 +2625,18 @@ spec:
           containerPort: 9090
         resources:
           requests:
-            cpu: 500m
-            memory: 500M
+            cpu: 1000m
+            memory: 2Gi
           limits:
-            cpu: 500m
-            memory: 500M
+            cpu: 1000m
+            memory: 2Gi
         volumeMounts:
         - name: config-volume
           mountPath: /etc/prometheus
         - name: rules-volume
           mountPath: /etc/prometheus-rules
+        - name: prometheus
+          mountPath: /prometheus
       volumes:
       - name: config-volume
         configMap:
@@ -2604,6 +2644,9 @@ spec:
       - name: rules-volume
         configMap:
           name: prometheus-rules
+      - name: prometheus
+        persistentVolumeClaim:
+          claimName: prometheus-pvc
 ---
 apiVersion: contour.heptio.com/v1beta1
 kind: IngressRoute

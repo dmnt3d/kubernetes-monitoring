@@ -27,16 +27,18 @@ spec:
           containerPort: 9090
         resources:
           requests:
-            cpu: 500m
-            memory: 500M
+            cpu: 1000m
+            memory: 2Gi
           limits:
-            cpu: 500m
-            memory: 500M
+            cpu: 1000m
+            memory: 2Gi
         volumeMounts:
         - name: config-volume
           mountPath: /etc/prometheus
         - name: rules-volume
           mountPath: /etc/prometheus-rules
+        - name: prometheus
+          mountPath: /prometheus
       volumes:
       - name: config-volume
         configMap:
@@ -44,3 +46,6 @@ spec:
       - name: rules-volume
         configMap:
           name: prometheus-rules
+      - name: prometheus
+        persistentVolumeClaim:
+          claimName: prometheus-pvc
